@@ -31,6 +31,16 @@ bool contains(const std::string& value, const std::string& needle)
 class FakeBackend final : public barista::drh::SessionBackend
 {
 public:
+	int runtime_starts = 0;
+	int stops = 0;
+	bool disconnect_pending = false;
+	bool consume_gamepad_disconnected_event() override
+	{
+		const bool result = disconnect_pending;
+		disconnect_pending = false;
+		return result;
+	}
+	void fail_runtime() { m_snapshot.last_error = "AP failed"; }
 	barista::drh::BackendResult start_pairing(const barista::drh::PairStartRequest& request) override
 	{
 		m_snapshot.phase = "pairing";
@@ -55,6 +65,7 @@ public:
 
 	barista::drh::BackendResult start_runtime(const barista::drh::PairStartRequest& request) override
 	{
+		++runtime_starts;
 		m_snapshot.phase = "runtime";
 		m_snapshot.base_interface = request.interface_name;
 		m_snapshot.ap_interface = request.interface_name;
@@ -64,6 +75,7 @@ public:
 
 	barista::drh::BackendResult stop_session() override
 	{
+		++stops;
 		m_snapshot = {};
 		return {true, "session stopped"};
 	}
@@ -178,6 +190,38 @@ int main()
 			"WPS completion event should enter runtime automatically");
 	}
 
+	{
+		auto backend = std::make_unique<FakeBackend>();
+		auto* radio = backend.get();
+		barista::drh::ServerCore standby(std::move(backend));
+		barista::drh::AutomaticCycleConfig config;
+		config.request.interface_name = "wlangamepad";
+		config.request.ap_mac = *barista::drh::MacAddress::parse("02:00:00:00:00:01");
+		config.request.pairing_code = *barista::drh::PairingCode::from_numeric(123);
+		config.check_duration = std::chrono::seconds(0);
+		config.pairing_enabled = false;
+		config.stay_in_runtime = true;
+		standby.start_automatic(config);
+		for (int i = 0; i < 20; ++i) standby.process_backend_events();
+		expect(radio->runtime_starts == 1 && radio->stops == 1,
+			"standby must keep the AP up after its check deadline");
+		radio->signal_connected();
+		standby.process_backend_events();
+		expect(standby.state().gamepad_connected, "connection must wake standby");
+		radio->disconnect_pending = true;
+		standby.process_backend_events();
+		expect(!standby.state().gamepad_connected, "disconnect must clear connection");
+		for (int i = 0; i < 20; ++i) standby.process_backend_events();
+		expect(radio->runtime_starts == 1, "disconnect must not recycle the AP");
+		radio->fail_runtime();
+		standby.process_backend_events();
+		expect(radio->runtime_starts == 2, "failed AP must still be recovered");
+		config.stay_in_runtime = false;
+		standby.start_automatic(config);
+		const auto before = radio->runtime_starts;
+		standby.process_backend_events();
+		expect(radio->runtime_starts == before + 1, "normal discovery must retain its cycle");
+	}
 	std::cout << "drcd_core_tests: ok\n";
 	return 0;
 }

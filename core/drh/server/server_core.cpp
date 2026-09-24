@@ -357,6 +357,16 @@ void ServerCore::process_backend_events()
 		}
 	}
 
+	// A dedicated GamePad radio remains available while the browser and encoder
+	// sleep. Cycling the AP every check_duration would break wake-on-connect.
+	if (m_automatic.has_value() && m_automatic->stay_in_runtime &&
+		m_state_machine.state().phase == barista::drh::SessionPhase::Runtime)
+	{
+		const auto snapshot = m_backend->snapshot();
+		if (snapshot.phase == "runtime" && snapshot.last_error.empty())
+			return;
+	}
+
 	if (!m_automatic.has_value() || m_state_machine.state().gamepad_connected ||
 		std::chrono::steady_clock::now() < m_phase_deadline)
 		return;

@@ -1240,12 +1240,18 @@ public:
 		m_psk_hex.clear();
 		m_paired_gamepad_macs.clear();
 		m_snapshot = {};
+		m_runtime_ap_failed.store(false);
 		return {true, "session stopped"};
 	}
 
 	BackendSnapshot snapshot() const override
 	{
 		BackendSnapshot snapshot = m_snapshot;
+		if (m_runtime_ap_failed.load())
+		{
+			snapshot.phase = "failed";
+			snapshot.last_error = "runtime access point stopped unexpectedly";
+		}
 		if (m_runtime_transport)
 		{
 			const auto stats = m_runtime_transport->stats();
@@ -2194,6 +2200,7 @@ private:
 		if (m_hostapd_output_fd < 0)
 			return;
 		m_hostapd_monitor_phase = std::move(phase);
+		m_runtime_ap_failed.store(false);
 		m_hostapd_monitor_stop.store(false);
 		m_hostapd_monitor_thread = std::thread([this]() {
 			MonitorHostapdOutputLoop();
@@ -2353,6 +2360,8 @@ private:
 				LogHostapdLine(m_hostapd_monitor_phase, line);
 			}
 		}
+		if (!m_hostapd_monitor_stop.load() && m_hostapd_monitor_phase == "runtime")
+			m_runtime_ap_failed.store(true);
 		Log("hostapd monitor: stopped");
 	}
 
@@ -2852,6 +2861,11 @@ private:
 			m_gamepad_disconnected_requested.store(true);
 		if (phase == "runtime" && line.find("AP-STA-CONNECTED") != std::string::npos)
 			m_gamepad_associated_requested.store(true);
+		if (phase == "runtime" &&
+			(line.find("AP-DISABLED") != std::string::npos ||
+			 line.find("INTERFACE_UNAVAILABLE") != std::string::npos ||
+			 line.find("is unavailable -- stopped") != std::string::npos))
+			m_runtime_ap_failed.store(true);
 		if (line.find("INTERFACE_UNAVAILABLE") != std::string::npos ||
 			line.find("is unavailable -- stopped") != std::string::npos)
 			QueueStatus("Wi-Fi AP was stopped externally; see " + m_log_path);
@@ -2948,6 +2962,7 @@ private:
 	std::thread m_dhcp_thread;
 	std::atomic_bool m_dhcp_stop{false};
 	std::unique_ptr<barista::drh::RuntimeTransport> m_runtime_transport;
+	std::atomic<bool> m_runtime_ap_failed{false};
 	std::unique_ptr<MediaStreamer> m_media_streamer;
 };
 }

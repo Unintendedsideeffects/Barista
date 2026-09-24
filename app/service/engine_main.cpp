@@ -151,6 +151,7 @@ int main(int argc, char** argv)
 	bool automatic = true;
 	bool pairing_enabled = true;
 	bool start_in_pairing = false;
+	bool stay_in_runtime = false;
 	std::string test_media_path;
 	bool test_black_frames = false;
 	for (int i = 1; i < argc; ++i)
@@ -182,6 +183,11 @@ int main(int argc, char** argv)
 			automatic = false;
 			continue;
 		}
+		if (arg == "--standby")
+		{
+			stay_in_runtime = true;
+			continue;
+		}
 		if (arg == "--np")
 		{
 			pairing_enabled = false;
@@ -208,6 +214,7 @@ int main(int argc, char** argv)
 				<< "drcd " << barista::drh::version() << "\n"
 				<< "Usage: drcd [--socket <path>] [--interface <iface>] [--ap-mac <mac>]\n"
 				<< "            [--pair-code <digits 0-3>] [--play <media> | --black] [--np] [--manual]\n"
+				<< "  --standby       Keep a healthy runtime AP up while the GamePad sleeps\n"
 				<< "  --np            Check for paired GamePads without entering pairing mode\n"
 				<< "  --pair          Enter pairing mode immediately\n"
 				<< "  --play <media>  Loop audio/video to the GamePad after it connects\n"
@@ -296,6 +303,7 @@ int main(int argc, char** argv)
 			},
 			.pairing_enabled = pairing_enabled,
 			.start_in_pairing = start_in_pairing,
+			.stay_in_runtime = stay_in_runtime,
 		});
 	}
 	while (!barista::drh::is_stop_requested())

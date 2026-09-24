@@ -26,6 +26,7 @@ struct AutomaticCycleConfig
 	std::chrono::seconds post_pair_grace_duration{60};
 	bool pairing_enabled = true;
 	bool start_in_pairing = false;
+	bool stay_in_runtime = false;
 };
 
 class ServerCore
