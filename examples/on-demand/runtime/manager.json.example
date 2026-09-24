@@ -1,0 +1,6 @@
+{
+  "interface": "wlangamepad",
+  "disconnect_grace_seconds": 45,
+  "pairing_timeout_seconds": 180,
+  "retry_seconds": 60
+}

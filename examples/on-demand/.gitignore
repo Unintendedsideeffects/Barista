@@ -1,0 +1,8 @@
+state/
+run/
+manager.json
+.env
+.env.*
+!.env.example
+build/
+__pycache__/

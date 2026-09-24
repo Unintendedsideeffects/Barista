@@ -1,0 +1,25 @@
+[Unit]
+Description=GamePad radio standby and dashboard wake manager
+Requires=docker.service
+After=docker.service network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/barista/examples/on-demand
+ExecStart=/usr/bin/python3 /opt/barista/examples/on-demand/runtime/manager.py
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=90
+RuntimeDirectory=barista-gamepad
+RuntimeDirectoryMode=0750
+MemoryMax=192M
+CPUQuota=20%
+TasksMax=64
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/barista/examples/on-demand/run /opt/barista/examples/on-demand/state /run/barista-gamepad
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,16 @@
+**/.git
+**/build
+**/build-*
+**/state
+**/run
+**/__pycache__
+**/*.pyc
+**/.env
+**/.env.*
+**/manager.json
+**/credentials.conf
+**/*.key
+**/*.pem
+**/*.log
+**/*.pcap
+**/*.pcapng

@@ -1,0 +1,67 @@
+name: barista-gamepad
+services:
+  radio:
+    image: local/barista-gamepad-radio:standby
+    build:
+      context: ../..
+      dockerfile: examples/on-demand/Dockerfile
+      target: radio
+    container_name: barista-gamepad-radio
+    network_mode: host
+    init: true
+    restart: "no"
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN, NET_RAW, CHOWN, FOWNER]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,size=16m
+    volumes:
+      - ./state/radio:/var/lib/drcd
+      - ./run:/run/barista
+    environment:
+      GAMEPAD_INTERFACE: "${GAMEPAD_INTERFACE:-wlangamepad}"
+      GAMEPAD_PAIR_CODE: "${GAMEPAD_PAIR_CODE:-}"
+      DRCD_CREDENTIALS_FILE: /var/lib/drcd/credentials.conf
+      DRCD_HOSTAPD_BIN: /usr/local/bin/barista-hostapd
+      BARISTA_MUG_SOCKET: /run/barista/media-1000.sock
+      BARISTA_CLIENT_UID: "1000"
+    mem_limit: 512m
+    cpus: 2
+    pids_limit: 96
+    stop_grace_period: 20s
+    logging:
+      driver: json-file
+      options: {max-size: 5m, max-file: "2"}
+
+  dashboard:
+    image: local/barista-gamepad-dashboard:standby
+    build:
+      context: ../..
+      dockerfile: examples/on-demand/Dockerfile
+      target: dashboard
+    container_name: barista-gamepad-dashboard
+    profiles: [on-demand]
+    init: true
+    restart: "no"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,size=128m
+    shm_size: 128m
+    volumes:
+      - ./state/browser:/home/gamepad
+      - ./run:/run/barista:ro
+    environment:
+      DISPLAY: ":99"
+      GAMEPAD_DEBUG: "${GAMEPAD_DEBUG:-0}"
+      BARISTA_MUG_SOCKET: /run/barista/media-1000.sock
+      GAMEPAD_URL: "${GAMEPAD_URL:?Set GAMEPAD_URL in the private .env file}"
+    mem_limit: 1024m
+    cpus: 1.5
+    pids_limit: 192
+    stop_grace_period: 15s
+    logging:
+      driver: json-file
+      options: {max-size: 5m, max-file: "2"}

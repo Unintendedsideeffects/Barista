@@ -1,5 +1,15 @@
 # Barista
 
+## Wake-on-demand fork
+
+This fork adds [persistent radio standby](docs/standby.md) and an optional
+[on-demand browser dashboard](examples/on-demand/README.md). The browser starts
+when a paired GamePad connects and stops after it disconnects. Physical wake,
+display, and touch acceptance for this setup are still pending.
+
+The package installation instructions below install upstream Barista. Build
+from this fork or follow the example to use these changes.
+
 <p align="center"><img src="barista-logo.png" width="220" alt="Barista logo"></p>
 
 Use a Wii U GamePad as a wireless second screen, controller, and audio device
