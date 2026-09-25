@@ -31,6 +31,16 @@ public:
         m_valid = m_encoder && m_scratch && m_input && !H264E_init(m_encoder, &parameters);
         // Presets which disable deblocking cannot match the implicit slice header.
         m_speed = options.fastSearch ? 9 : 5;
+        // Local: DRCD_ENCODE_SPEED picks a MiniH264 preset. 1 adds intra4x4 on
+        // P slices, 0 also adds 16x8/8x16/8x8 partitions. 8 and 10 disable
+        // deblocking and cannot match the implicit slice header, so are refused.
+        if (const char* speed = std::getenv("DRCD_ENCODE_SPEED"); speed && *speed)
+        {
+            char* end = nullptr;
+            const long value = std::strtol(speed, &end, 10);
+            if (*end == 0 && value >= 0 && value <= 9 && value != 8)
+                m_speed = static_cast<int>(value);
+        }
     }
 
     ~NativeEncoder() override
