@@ -5,6 +5,7 @@
 #include <X11/Xutil.h>
 #include <X11/keysym.h>
 #include <X11/extensions/XTest.h>
+#include <X11/extensions/Xdamage.h>
 
 #include <algorithm>
 #include <array>
@@ -12,8 +13,10 @@
 #include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <iostream>
 #include <optional>
 #include <string>
@@ -279,6 +282,29 @@ void release_inputs(Display* dpy, uint32_t& previous_buttons, bool& previous_tou
     XFlush(dpy);
 }
 
+// Something is being held: a main-word button, a touch, or a deflected stick.
+// Idle reports keep arriving, so activity is state, not the arrival of a report.
+bool has_activity(const std::array<uint8_t, 128>& report) {
+    if (report[2] || report[3]) return true;
+    int x{}, y{};
+    if (read_touch(report, x, y)) return true;
+    for (size_t axis = 0; axis < 4; ++axis)
+        if (read_stick(report, axis) != 0.0) return true;
+    return false;
+}
+
+long env_seconds(const char* name, long fallback) {
+    const char* value = std::getenv(name);
+    if (!value || !*value) return fallback;
+    char* end = nullptr;
+    const long parsed = std::strtol(value, &end, 10);
+    return (*end == 0 && parsed > 0) ? parsed : fallback;
+}
+
+// Shared with the dashboard supervisor through the container's private /tmp.
+constexpr const char* kParkFile = "/tmp/gamepad-park";
+constexpr const char* kWakeFile = "/tmp/gamepad-wake";
+
 std::string endpoint() {
     if (const char* configured = std::getenv("BARISTA_MUG_SOCKET")) return configured;
     return "/run/barista/media-" + std::to_string(getuid()) + ".sock";
@@ -309,6 +335,16 @@ int main() {
     hook.set_active(false);
 
     const Window root = DefaultRootWindow(dpy);
+    // Capture only when the screen changed. Damage is tracked on the root window
+    // (as x11vnc does), so a relaunched or replaced browser window needs nothing
+    // extra. Without the extension every frame is treated as changed.
+    int damage_event{}, damage_error{};
+    Damage damage = 0;
+    if (XDamageQueryExtension(dpy, &damage_event, &damage_error))
+        damage = XDamageCreate(dpy, root, XDamageReportNonEmpty);
+    else
+        std::cerr << "barista-dashboard-bridge: DAMAGE unavailable; capturing every frame\n";
+    bool dirty = true, was_presenting = false;
     uint32_t previous_buttons = 0;
     bool previous_touch = false;
     double scroll[2] = {0.0, 0.0};
@@ -321,6 +357,27 @@ int main() {
     std::optional<TargetWindow> target;
     std::vector<uint8_t> rgb;
 
+    // Screen timeout: after GAMEPAD_SCREEN_TIMEOUT seconds without a held button,
+    // touch or stick the pad goes black (and dim, via Barista). After a further
+    // GAMEPAD_PARK_AFTER seconds asleep the browser is parked: the dashboard
+    // supervisor stops Chromium while this bridge keeps reading input.
+    const std::chrono::seconds screen_timeout(env_seconds("GAMEPAD_SCREEN_TIMEOUT", 120));
+    const std::chrono::seconds park_after(env_seconds("GAMEPAD_PARK_AFTER", 600));
+    auto last_activity = Clock::now();
+    bool awake = true, swallow = false, parked = false, was_connected = false;
+    auto set_parked = [&parked](bool park) {
+        if (park == parked) return;
+        parked = park;
+        if (park) {
+            std::ofstream(kParkFile).put('1');
+            std::cerr << "barista-dashboard-bridge: parking the browser\n";
+        } else {
+            std::remove(kParkFile);
+            std::cerr << "barista-dashboard-bridge: browser wanted\n";
+        }
+    };
+    std::remove(kParkFile);
+
     std::cerr << "barista-dashboard-bridge: waiting for Barista at " << endpoint() << '\n';
     while (true) {
         const auto now = Clock::now();
@@ -330,6 +387,15 @@ int main() {
             had_connection = connected;
         }
         if (now >= next_search) {
+            // Remote wake (gamepadctl wake): same as a touch, minus the input.
+            if (std::remove(kWakeFile) == 0 && connected) {
+                last_activity = now;
+                if (!awake) {
+                    awake = true;
+                    set_parked(false);
+                    std::cerr << "barista-dashboard-bridge: screen awake (remote)\n";
+                }
+            }
             target = find_dashboard_window(dpy, root);
             next_search = now + std::chrono::milliseconds(250);
             const bool found = target.has_value();
@@ -344,31 +410,78 @@ int main() {
             }
         }
 
-        const bool presenting = connected && target.has_value();
-        hook.set_active(presenting);
-        if (presenting && now >= next_frame) {
-            if (capture_rgb(dpy, *target, rgb))
-                hook.submit_rgb(std::move(rgb), kOutputWidth, kOutputHeight);
-            // Match the GamePad's ~60 fps: at 15 fps each frame carried a large motion
-            // step that the fixed-QP32 encoder smeared until later frames refined it.
-            next_frame = now + std::chrono::milliseconds(16);
+        if (connected && !was_connected) {
+            // A fresh session starts awake with the browser running.
+            last_activity = now;
+            awake = true;
+            swallow = false;
+            set_parked(false);
         }
+        was_connected = connected;
 
-        if (presenting && now >= next_input) {
+        // Input is read whenever Barista is connected - also with the screen
+        // asleep or the browser parked - so a touch can wake it.
+        if (connected && now >= next_input) {
             std::array<uint8_t, 128> report{};
             if (hook.read_input(report)) {
-                apply_input(dpy, *target, report, previous_buttons, previous_touch, scroll);
                 last_valid_input = now;
+                const bool held = has_activity(report);
+                if (held) last_activity = now;
+                if (!awake && held) {
+                    // The waking press only wakes; it must not also toggle a light.
+                    awake = true;
+                    swallow = true;
+                    set_parked(false);
+                    std::cerr << "barista-dashboard-bridge: screen awake\n";
+                }
+                if (swallow && !held) swallow = false;
+                if (awake && !swallow && target)
+                    apply_input(dpy, *target, report, previous_buttons, previous_touch, scroll);
             } else if (last_valid_input != Clock::time_point{} &&
                        now - last_valid_input > std::chrono::milliseconds(500)) {
                 release_inputs(dpy, previous_buttons, previous_touch);
                 last_valid_input = {};
             }
             next_input = now + std::chrono::milliseconds(8);
-        } else if (!presenting && (previous_buttons || previous_touch)) {
+        }
+
+        if (connected && awake && now - last_activity > screen_timeout) {
+            awake = false;
+            release_inputs(dpy, previous_buttons, previous_touch);
+            // Black idle art; Barista also drops the backlight while the source is idle.
+            hook.submit_rgb(std::vector<uint8_t>(kOutputWidth * kOutputHeight * 3, 0),
+                            kOutputWidth, kOutputHeight, true);
+            std::cerr << "barista-dashboard-bridge: screen asleep after "
+                      << screen_timeout.count() << "s without input\n";
+        }
+        if (connected && !awake && !parked && now - last_activity > screen_timeout + park_after)
+            set_parked(true);
+
+        const bool presenting = connected && awake && target.has_value();
+        hook.set_active(presenting);
+        while (XPending(dpy)) {
+            XEvent event;
+            XNextEvent(dpy, &event);
+            if (damage && event.type == damage_event + XDamageNotify) dirty = true;
+        }
+        // Waking replaced the picture with idle art; send the dashboard again.
+        if (presenting && !was_presenting) dirty = true;
+        was_presenting = presenting;
+        if (presenting && now >= next_frame && (dirty || !damage)) {
+            // Reset before copying, so a change during the copy triggers another.
+            if (damage) XDamageSubtract(dpy, damage, None, None);
+            dirty = false;
+            if (capture_rgb(dpy, *target, rgb))
+                hook.submit_rgb(std::move(rgb), kOutputWidth, kOutputHeight);
+            // Match the GamePad's ~60 fps: at 15 fps each frame carried a large motion
+            // step that the fixed-QP32 encoder smeared until later frames refined it.
+            next_frame = now + std::chrono::milliseconds(16);
+        }
+        if (!presenting && (previous_buttons || previous_touch)) {
             release_inputs(dpy, previous_buttons, previous_touch);
             last_valid_input = {};
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        // Asleep or parked there is nothing to capture; input at 8 ms is plenty to wake.
+        std::this_thread::sleep_for(std::chrono::milliseconds(presenting ? 2 : 8));
     }
 }

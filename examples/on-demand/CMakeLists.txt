@@ -8,6 +8,7 @@ get_filename_component(BARISTA_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../.." AB
 
 find_package(X11 REQUIRED)
 find_library(XTST_LIBRARY Xtst REQUIRED)
+find_library(XDAMAGE_LIBRARY Xdamage REQUIRED)
 find_package(Threads REQUIRED)
 
 add_executable(barista-dashboard-bridge
@@ -16,7 +17,7 @@ add_executable(barista-dashboard-bridge
 target_include_directories(barista-dashboard-bridge PRIVATE
     ${BARISTA_SOURCE_DIR}/core ${X11_INCLUDE_DIR})
 target_link_libraries(barista-dashboard-bridge PRIVATE
-    ${X11_LIBRARIES} ${XTST_LIBRARY} Threads::Threads)
+    ${X11_LIBRARIES} ${XTST_LIBRARY} ${XDAMAGE_LIBRARY} Threads::Threads)
 target_compile_options(barista-dashboard-bridge PRIVATE -Wall -Wextra -Wpedantic)
 
 option(GAMEPAD_BUILD_PROBE "Build the cross-container AppHook validation tool" OFF)

@@ -88,6 +88,14 @@ class Runtime:
     def status(self):
         return engine_status(self.root / "run/engine.sock")
 
+    def wake(self):
+        # The bridge polls for this flag; it lives in the container's private /tmp.
+        result = subprocess.run(
+            ["docker", "exec", "ha-gamepad-dashboard", "touch", "/tmp/gamepad-wake"],
+            capture_output=True, text=True, timeout=10)
+        if result.returncode:
+            raise RuntimeError(result.stderr.strip()[-500:] or "Could not signal the dashboard")
+
 class Manager:
     def __init__(self, root, config, runtime=None, clock=time.monotonic):
         self.root = root
@@ -243,6 +251,15 @@ class Manager:
                 self.retry_at = 0
                 self.error = ""
             return {"state": "paused" if self.paused else "resuming"}
+        if command == "wake":
+            # Wakes a pad that is on but asleep (screen timeout) or has its browser
+            # parked. A pad that is switched off can only be woken by its power button.
+            if not self.state.get("connected"):
+                raise ValueError("The GamePad is not connected; switch it on with its power button")
+            if not self.dashboard:
+                raise ValueError("The dashboard is not running yet")
+            self.runtime.wake()
+            return {"state": "waking"}
         if command == "cancel-pair":
             self.stop_all()
             self.pair_code = ""
@@ -300,7 +317,7 @@ def serve(root, config):
 
 def cli():
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=["status", "pair", "cancel-pair", "pause", "resume"])
+    parser.add_argument("command", choices=["status", "pair", "cancel-pair", "pause", "resume", "wake"])
     parser.add_argument("code", nargs="?")
     args = parser.parse_args()
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:

@@ -1,7 +1,7 @@
 FROM debian:bookworm-slim AS build
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential cmake ninja-build git ca-certificates pkg-config \
-    libfreetype6-dev libnl-3-dev libnl-genl-3-dev libssl-dev libx11-dev libxtst-dev \
+    libfreetype6-dev libnl-3-dev libnl-genl-3-dev libssl-dev libx11-dev libxtst-dev libxdamage-dev \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /src
 COPY . .
@@ -29,7 +29,7 @@ ENTRYPOINT ["/usr/local/bin/gamepad-radio"]
 FROM debian:bookworm-slim AS dashboard
 LABEL io.barista.upstream-revision="3bad9db554d71f1ae733d250f64fab0598d97d2b"
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    chromium xvfb openbox x11-utils libxtst6 python3 fonts-dejavu-core ca-certificates \
+    chromium xvfb openbox x11-utils libxtst6 libxdamage1 python3 fonts-dejavu-core ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --uid 1000 --create-home --shell /usr/sbin/nologin gamepad
 COPY --from=build /build/bridge/barista-dashboard-bridge /usr/local/bin/barista-dashboard-bridge

@@ -27,6 +27,8 @@ class FakeRuntime:
     def status(self):
         if self.unreachable: raise OSError("not ready")
         return self.reply
+    def wake(self):
+        self.calls.append(("wake", "dashboard"))
 
 class ManagerTest(unittest.TestCase):
     def setUp(self):
@@ -150,6 +152,14 @@ class ManagerTest(unittest.TestCase):
         self.assertFalse((self.root / "state/paused").exists())
         self.tick()
         self.assertEqual(self.manager.state["state"], "active")
+
+    def test_wake_needs_a_connected_pad_and_signals_the_dashboard(self):
+        self.tick()
+        with self.assertRaises(ValueError):
+            self.manager.command({"command": "wake"})
+        self.connect()
+        self.assertEqual(self.manager.command({"command": "wake"}), {"state": "waking"})
+        self.assertIn(("wake", "dashboard"), self.rt.calls)
 
 if __name__ == "__main__":
     unittest.main()

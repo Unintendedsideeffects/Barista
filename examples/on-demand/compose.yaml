@@ -56,6 +56,8 @@ services:
     environment:
       DISPLAY: ":99"
       GAMEPAD_DEBUG: "${GAMEPAD_DEBUG:-0}"
+      GAMEPAD_SCREEN_TIMEOUT: "${GAMEPAD_SCREEN_TIMEOUT:-120}"
+      GAMEPAD_PARK_AFTER: "${GAMEPAD_PARK_AFTER:-600}"
       BARISTA_MUG_SOCKET: /run/barista/media-1000.sock
       GAMEPAD_URL: "${GAMEPAD_URL:?Set GAMEPAD_URL in the private .env file}"
     mem_limit: 1024m
