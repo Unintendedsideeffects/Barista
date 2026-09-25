@@ -674,6 +674,18 @@ void MediaStreamer::video_loop()
 		? "Video encoder: MiniH264 fast search (preset 9)"
 		: "Video encoder: MiniH264 default search (preset 5)");
 	m_transport.report_status("Video recovery: requested IDRs; cyclic intra-refresh is not implemented");
+	const char* settle_option = std::getenv("DRCD_SETTLE_IDR_FRAMES");
+	const unsigned settle_idr_frames = settle_option ? std::strtoul(settle_option, nullptr, 10) : 12;
+	const char* settle_rows_option = std::getenv("DRCD_SETTLE_IDR_MIN_ROWS");
+	const uint64_t settle_min_rows = settle_rows_option ? std::strtoull(settle_rows_option, nullptr, 10) : 240;
+	std::vector<uint8_t> settle_previous;
+	uint64_t settle_burst_rows = 0;
+	uint64_t settle_refreshes = 0;
+	unsigned settle_still_frames = 0;
+	m_transport.report_status(settle_idr_frames
+		? "Video settle refresh: IDR after " + std::to_string(settle_idr_frames) +
+			" still frames following >=" + std::to_string(settle_min_rows) + " changed luma rows"
+		: std::string("Video settle refresh: disabled"));
 	SerialVideoSender sender;
 	FormatSlotScheduler formats([&](std::optional<uint32_t> legacy) {
 		const uint32_t stamp = legacy.value_or(FormatVideoTimestamp(m_transport.timestamp_us()));
@@ -722,6 +734,34 @@ void MediaStreamer::video_loop()
 			const auto stats = m_transport.stats();
 			m_home_menu->render(frame, stats.battery_charge_valid, stats.battery_charge,
 				menu_opacity);
+		}
+		// Local: fixed QP32 P-frames leave motion smear that never refines once the
+		// picture is static (the residual quantises to zero). After a burst of
+		// motion covering enough luma rows settles, send one clean IDR.
+		if (settle_idr_frames > 0)
+		{
+			if (settle_previous.size() != frame.size())
+				settle_previous.assign(frame.begin(), frame.end());
+			unsigned changed_rows = 0;
+			for (size_t row = 0; row < kHeight; ++row)
+				changed_rows += std::memcmp(frame.data() + row * kWidth,
+					settle_previous.data() + row * kWidth, kWidth) != 0;
+			if (changed_rows)
+			{
+				std::memcpy(settle_previous.data(), frame.data(), frame.size());
+				settle_burst_rows += changed_rows;
+				settle_still_frames = 0;
+			}
+			else if (settle_burst_rows && ++settle_still_frames >= settle_idr_frames)
+			{
+				if (settle_burst_rows >= settle_min_rows)
+				{
+					force_idr = true;
+					m_transport.report_status("Video settle refresh IDR #" + std::to_string(++settle_refreshes) + " after " + std::to_string(settle_burst_rows) + " changed rows");
+				}
+				settle_burst_rows = 0;
+				settle_still_frames = 0;
+			}
 		}
 		uint64_t frame_recovery_generation;
 		{
