@@ -10,6 +10,7 @@
 #include <array>
 #include <chrono>
 #include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -135,14 +136,27 @@ bool capture_rgb(Display* dpy, const TargetWindow& target, std::vector<uint8_t>&
                               AllPlanes, ZPixmap);
     if (!image) return false;
     rgb.resize(static_cast<size_t>(kOutputWidth) * kOutputHeight * 3);
+    // Common Xvfb layout: read rows directly instead of 415k XGetPixel calls.
+    const bool direct = image->bits_per_pixel == 32 && image->byte_order == LSBFirst &&
+                        image->red_mask == 0xff0000 && image->green_mask == 0x00ff00 &&
+                        image->blue_mask == 0x0000ff;
     for (unsigned y = 0; y < kOutputHeight; ++y) {
         const unsigned source_y = std::min(target.height - 1,
             static_cast<unsigned>((static_cast<uint64_t>(y) * target.height) / kOutputHeight));
+        const auto* row = reinterpret_cast<const uint8_t*>(image->data) +
+                          static_cast<size_t>(source_y) * image->bytes_per_line;
         for (unsigned x = 0; x < kOutputWidth; ++x) {
             const unsigned source_x = std::min(target.width - 1,
                 static_cast<unsigned>((static_cast<uint64_t>(x) * target.width) / kOutputWidth));
-            const unsigned long pixel = XGetPixel(image, source_x, source_y);
             const size_t offset = (static_cast<size_t>(y) * kOutputWidth + x) * 3;
+            if (direct) {
+                const uint8_t* bgrx = row + static_cast<size_t>(source_x) * 4;
+                rgb[offset] = bgrx[2];
+                rgb[offset + 1] = bgrx[1];
+                rgb[offset + 2] = bgrx[0];
+                continue;
+            }
+            const unsigned long pixel = XGetPixel(image, source_x, source_y);
             rgb[offset] = static_cast<uint8_t>(channel(pixel, image->red_mask));
             rgb[offset + 1] = static_cast<uint8_t>(channel(pixel, image->green_mask));
             rgb[offset + 2] = static_cast<uint8_t>(channel(pixel, image->blue_mask));
@@ -183,9 +197,49 @@ void set_key(Display* dpy, KeySym symbol, bool before, bool after) {
     if (code != 0) XTestFakeKeyEvent(dpy, code, after ? True : False, CurrentTime);
 }
 
+// Stick axes are little-endian 12-bit values at bytes 6..13 (LX, LY, RX, RY),
+// centred near 2048. Returns -1..1 with a dead zone so a resting stick is 0.
+double read_stick(const std::array<uint8_t, 128>& report, size_t axis) {
+    const int raw = report[6 + axis * 2] | (report[7 + axis * 2] << 8);
+    const double value = std::clamp((raw - 2048) / 1000.0, -1.0, 1.0);
+    return std::abs(value) < 0.2 ? 0.0 : value;
+}
+
+// Either stick scrolls whatever is under the pointer, proportionally to deflection.
+void apply_scroll(Display* dpy, const TargetWindow& target,
+                  const std::array<uint8_t, 128>& report, double scroll[2]) {
+    const double lx = read_stick(report, 0), ly = read_stick(report, 1);
+    const double rx = read_stick(report, 2), ry = read_stick(report, 3);
+    const double axes[2] = {std::abs(rx) > std::abs(lx) ? rx : lx,
+                            std::abs(ry) > std::abs(ly) ? ry : ly};
+    if (axes[0] == 0.0 && axes[1] == 0.0) {
+        scroll[0] = scroll[1] = 0.0;
+        return;
+    }
+    Window root_return{}, child{};
+    int root_x{}, root_y{}, win_x{}, win_y{};
+    unsigned mask{};
+    if (XQueryPointer(dpy, target.id, &root_return, &child, &root_x, &root_y, &win_x, &win_y, &mask) &&
+        (win_x < 0 || win_y < 0 || win_x >= static_cast<int>(target.width) ||
+         win_y >= static_cast<int>(target.height)))
+        XTestFakeMotionEvent(dpy, -1, target.x + target.width / 2, target.y + target.height / 2,
+                             CurrentTime);
+    // Called every 8 ms: full deflection is ~30 wheel steps per second.
+    constexpr unsigned kButtons[2][2] = {{6, 7}, {5, 4}}; // {negative, positive}: left/right, down/up
+    for (unsigned axis = 0; axis < 2; ++axis) {
+        scroll[axis] += axes[axis] * axes[axis] * (axes[axis] < 0 ? -0.24 : 0.24);
+        while (std::abs(scroll[axis]) >= 1.0) {
+            const unsigned button = kButtons[axis][scroll[axis] > 0 ? 1 : 0];
+            XTestFakeButtonEvent(dpy, button, True, CurrentTime);
+            XTestFakeButtonEvent(dpy, button, False, CurrentTime);
+            scroll[axis] += scroll[axis] > 0 ? -1.0 : 1.0;
+        }
+    }
+}
+
 void apply_input(Display* dpy, const TargetWindow& target,
                  const std::array<uint8_t, 128>& report,
-                 uint32_t& previous_buttons, bool& previous_touch) {
+                 uint32_t& previous_buttons, bool& previous_touch, double scroll[2]) {
     const uint32_t buttons = read_buttons(report);
     set_key(dpy, XK_Return, previous_buttons & kA, buttons & kA);
     set_key(dpy, XK_Escape, previous_buttons & kB, buttons & kB);
@@ -208,6 +262,7 @@ void apply_input(Display* dpy, const TargetWindow& target,
     if (touching != previous_touch)
         XTestFakeButtonEvent(dpy, 1, touching ? True : False, CurrentTime);
     previous_touch = touching;
+    if (!touching) apply_scroll(dpy, target, report, scroll);
     XFlush(dpy);
 }
 
@@ -256,6 +311,7 @@ int main() {
     const Window root = DefaultRootWindow(dpy);
     uint32_t previous_buttons = 0;
     bool previous_touch = false;
+    double scroll[2] = {0.0, 0.0};
     bool had_target = false;
     bool had_connection = false;
     auto next_frame = Clock::now();
@@ -293,13 +349,15 @@ int main() {
         if (presenting && now >= next_frame) {
             if (capture_rgb(dpy, *target, rgb))
                 hook.submit_rgb(std::move(rgb), kOutputWidth, kOutputHeight);
-            next_frame = now + std::chrono::milliseconds(66);
+            // Match the GamePad's ~60 fps: at 15 fps each frame carried a large motion
+            // step that the fixed-QP32 encoder smeared until later frames refined it.
+            next_frame = now + std::chrono::milliseconds(16);
         }
 
         if (presenting && now >= next_input) {
             std::array<uint8_t, 128> report{};
             if (hook.read_input(report)) {
-                apply_input(dpy, *target, report, previous_buttons, previous_touch);
+                apply_input(dpy, *target, report, previous_buttons, previous_touch, scroll);
                 last_valid_input = now;
             } else if (last_valid_input != Clock::time_point{} &&
                        now - last_valid_input > std::chrono::milliseconds(500)) {
