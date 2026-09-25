@@ -15,6 +15,9 @@ int main(int argc, char** argv)
     EncoderOptions options;
     options.disablePlanarPrediction = argc != 5 || std::string(argv[4]) != "planar";
     options.fastSearch = argc == 5 && std::string(argv[4]) == "fast";
+    // "skip": frames 7-9 of every 10 repeat the previous picture, exercising the
+    // all-P_SKIP path for unchanged input. Only the CABAC stream is meaningful.
+    const bool skipMode = argc == 5 && std::string(argv[4]) == "skip";
     NativeEncoder native(options);
     std::string error;
     if (!native.IsValid() || native.Encode({}, false, error) || error.empty())
@@ -46,6 +49,14 @@ int main(int argc, char** argv)
     const bool idr = index == 0 || index == 270 || index == 271;
     if (idr) number = 0;
     CabacSlice slice(idr);
+    const bool still = skipMode && !idr && index % 10 >= 7;
+    if (still)
+    {
+        for (unsigned mb = 0; mb < 1620; ++mb)
+            slice.Encode(CabacMacroblock{});
+    }
+    else
+    {
     for (int y = 0; y < 480; ++y)
         for (int x = 0; x < 864; ++x)
             pixels[y * 864 + x] = 16 + ((x + y + index * 3 + ((x / 13 ^ y / 11) & 7) * 17) % 220);
@@ -65,6 +76,7 @@ int main(int argc, char** argv)
     if (H264E_encode(enc, scratch, &run, &input, &coded, &size))
         throw std::runtime_error("encode failed");
     baseline.write(reinterpret_cast<char*>(coded), size);
+    }
     const auto reference = Reconstruction(enc);
     // Include coded padding hidden by the implicit SPS crop: these pixels
     // still participate in motion compensation on subsequent pictures.

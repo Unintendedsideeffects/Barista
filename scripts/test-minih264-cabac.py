@@ -14,8 +14,9 @@ def main():
         cabac = root / "cabac.h264"
         reconstruction = root / "reconstruction.yuv"
         subprocess.run([probe, str(cavlc), str(cabac), str(reconstruction), *sys.argv[3:]], check=True)
+        skip = "skip" in sys.argv[3:]
         decoded = []
-        for source in (cavlc, cabac):
+        for source in ((cabac,) if skip else (cavlc, cabac)):
             output = source.with_suffix(".yuv")
             subprocess.run([
                 ffmpeg, "-v", "error", "-xerror", "-apply_cropping", "0", "-c:v", "h264", "-i", str(source),
@@ -27,6 +28,8 @@ def main():
         if any(len(data) != expected for data in decoded):
             raise RuntimeError(f"decoder did not produce 300 uncropped 864x480 frames: "
                                f"got {[len(data) for data in decoded]} bytes, expected {expected} each")
+        if skip:
+            decoded.insert(0, decoded[0])
         if decoded[0] != decoded[1]:
             offset = next(i for i, (a, b) in enumerate(zip(*decoded)) if a != b)
             raise RuntimeError(f"CABAC reconstruction differs at decoded byte {offset}")
@@ -36,7 +39,8 @@ def main():
         if decoded[1] != reference:
             offset = next(i for i, (a, b) in enumerate(zip(decoded[1], reference)) if a != b)
             raise RuntimeError(f"CABAC differs from internal reconstruction at byte {offset}")
-        print("300 moving IDR/P frames match exactly, including frame-number wrap and consecutive IDRs")
+        print("300 IDR/P frames" + (" with all-skip repeats" if skip else "") +
+              " match exactly, including frame-number wrap and consecutive IDRs")
 
 
 if __name__ == "__main__":

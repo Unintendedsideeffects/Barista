@@ -41,6 +41,8 @@ public:
             if (*end == 0 && value >= 0 && value <= 9 && value != 8)
                 m_speed = static_cast<int>(value);
         }
+        const char* skip = std::getenv("DRCD_SKIP_UNCHANGED");
+        m_skipUnchanged = !skip || std::strcmp(skip, "0") != 0;
     }
 
     ~NativeEncoder() override
@@ -73,6 +75,17 @@ public:
             return std::nullopt;
         }
         const bool idr = requestIdr || m_firstFrame;
+        // Local: an unchanged picture becomes an all-P_SKIP slice instead of a full
+        // encode. Each skip predicts a zero motion vector from its (skipped or
+        // unavailable) neighbours, so the decoder reproduces the reference exactly;
+        // MiniH264's own reference is left untouched, so both stay in step.
+        if (!idr && m_skipUnchanged && std::memcmp(m_input, input.data(), input.size()) == 0)
+        {
+            CabacSlice still(false);
+            for (unsigned mb = 0; mb < 1620; ++mb)
+                still.Encode(CabacMacroblock{});
+            return still.Finish(m_frameIndex++);
+        }
         CabacSlice slice(idr);
         std::memcpy(m_input, input.data(), input.size());
         H264E_io_yuv_t picture{{m_input, m_input + DrcVideoWidth * DrcVideoHeight,
@@ -110,5 +123,6 @@ private:
     bool m_firstFrame = true;
     unsigned m_frameIndex = 0;
     int m_speed = 5;
+    bool m_skipUnchanged = true;
 };
 }
