@@ -31,10 +31,13 @@ adapter and driver and has not yet been measured on physical hardware.
 - The adapter's PHY must be visible in the same network namespace as the Docker
   daemon. In an LXC deployment, assign the dedicated PHY to that container
   separately; this example does not move or enroll host hardware.
+- Configure the actual installation country on the Linux radio host. A fresh
+  world (`00`) regulatory domain may restrict 5 GHz AP startup.
 - Network access from the browser container to your dashboard.
 
 The radio's `network_mode: host` refers to the Docker daemon's host namespace.
-It is limited to NET_ADMIN, NET_RAW, CHOWN and FOWNER. FOWNER is required for
+It is limited to NET_ADMIN, NET_RAW, NET_BIND_SERVICE, CHOWN and FOWNER.
+NET_BIND_SERVICE permits the DHCP server to bind UDP port 67. FOWNER is required for
 AppHook socket permissions after assigning the socket to the browser user.
 The browser runs as UID 1000, drops all capabilities, has a private X11 display,
 and receives no radio access or Docker socket. Both root filesystems are

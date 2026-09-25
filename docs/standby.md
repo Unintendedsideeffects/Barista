@@ -44,9 +44,12 @@ an authenticated dashboard and passed frames between its browser and AppHook
 containers. A simulated Wi-Fi PHY exercised namespace ownership and AP-mode
 permissions. These results precede packaging the public example.
 
-Physical pairing, wake latency, display, touch, and real-radio standby resource
-usage for this deployment remain pending compatible hardware. Simulated radio
-checks and application frames do not establish those results. The public
+Physical pairing and active protocol/video transport have now been observed
+with a TP-Link Archer T2U Nano (RTL8811AU family, `rtw88_8821au` driver).
+This exposed a missing NET_BIND_SERVICE capability for the radio DHCP server;
+the Compose example now includes it. GamePad display, touch, sleep/reconnect
+acceptance, and real-radio standby resource measurements remain pending.
+Transport counters alone do not prove the physical display or input. The public
 example uses fresh configuration and contains no authenticated browser profile.
 
 Changes are based on upstream commit
