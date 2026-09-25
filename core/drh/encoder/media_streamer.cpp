@@ -715,6 +715,10 @@ void MediaStreamer::video_loop()
 			if (active != external_active || current_idle_rev != external_idle_revision)
 			{
 				force_idr = true;
+				// Local: an idle source (the client screen timeout, or no client)
+				// drops the backlight to its lowest level; waking restores it.
+				if (active != external_active)
+					m_transport.set_lcd_brightness(active ? m_awake_lcd_level.load() : 1);
 				external_active = active;
 				external_idle_revision = current_idle_rev;
 				m_transport.report_status(active ? "AppHook source: active" : "AppHook source: idle");
@@ -1016,7 +1020,10 @@ void MediaStreamer::input_loop()
 				{
 					auto update = m_home_menu->process_input(packet->payload);
 					if (update.brightness)
+					{
+						m_awake_lcd_level.store(*update.brightness);
 						m_transport.set_lcd_brightness(*update.brightness);
+					}
 					if (update.play_sound)
 						play_home_menu_sound();
 				}

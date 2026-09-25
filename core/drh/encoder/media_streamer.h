@@ -51,6 +51,8 @@ private:
 	std::thread m_audio_thread;
 	std::thread m_input_thread;
 	std::atomic_bool m_stop{false};
+	// Local: LCD level to restore when the AppHook source wakes (home menu updates it).
+	std::atomic_uint8_t m_awake_lcd_level{3};
 	std::atomic_bool m_running{false};
 	std::atomic_uint64_t m_audio_packets{0};
 	std::mutex m_home_menu_sound_mutex;
